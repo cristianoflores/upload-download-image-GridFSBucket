@@ -2,95 +2,132 @@ const router = require('express').Router()
 const mongoose = require('mongoose')
 const multer = require('multer');
 const multerConfig = require('../middleware/multer')
+const ObjectID = require('mongodb').ObjectID;
+const mongodb = require('mongodb');
 const fs = require('fs')
 
 const conn = mongoose.connection
 
-let GridFSBucket;
-
 conn.once('open', () => {
-    GridFSBucket = new mongoose.mongo.GridFSBucket(conn.db, {
+
+    const GridFSBucket = new mongodb.GridFSBucket(conn.db, {
         bucketName: 'uploads',
     });
-});
 
-// @route POST /upload
-// @desc  Uploads file to DB
-router.post('/upload', multer(multerConfig).single('file'), (req, res) => {
-    res.json({ file: req.file });
-    //res.redirect('/');
-});
-
-// @route GET /files/:filename
-// @desc  Display single file object
-router.get('/files/:filename', (req, res) => {
-
-    GridFSBucket.find({ filename: req.params.filename }, (err, file) => {
-
-        console.log({ filename: req.params.filename })
-
-        // Check if file
-        if (!file || file.length === 0) {
-            console.log(err)
-            return res.status(404).json({ err: 'No file exists' });
-        }
-
-        return res.json({ file });
-    });
-});
-
-// @route GET /image/:filename
-// @desc Display Image
-router.get('/image/:filename', async (req, res) => {
-    await GridFSBucket.find({ filename: req.params.filename }, (err, file) => {
-        // Check if file
-        if (!file || file.length === 0) {
-            return res.status(404).json({
-                err: 'No file exists'
-            });
-        }
-
-        // Check if image
-        if (file.contentType === 'image/jpeg' || file.contentType === 'image/png') {
-            // Read output to browser
-            const readstream = fs.createReadStream(file.filename);
-            readstream.pipe(res);
-        } else {
-            res.status(404).json({
-                err: 'Not an image'
-            });
-        }
-    });
-});
-
-// @route GET /files
-// @desc  Display all files in JSON
-router.get('/files', async (req, res) => {
-    await GridFSBucket.find().toArray((err, files) => {
-        // Check if files
-        if (!files || files.length === 0) {
-            return res.status(404).json({
-                err: 'No files exist'
-            });
-        }
-
-        // Files exist
-        return res.json(files);
-    });
-});
-
-// @route DELETE /files/:id
-// @desc  Delete file
-router.delete('/files/:id', (req, res) => {
-    GridFSBucket.delete({ _id: req.params.id }, (err, gridStore) => {
-        if (err) {
-            return res.status(404).json({ err: 'Error on delete' });
-        }
-
-        return res.json({ ok: 'file deleted' })
+    /**
+     * @route POST /upload
+     * @desc  Upload file to DB
+     */
+    router.post('/upload', multer(multerConfig).single('file'), (req, res) => {
+        res.json({ file: req.file });
         //res.redirect('/');
     });
+
+    /**
+     * @route GET /download/:id
+     * @desc  Download file
+     * */
+    router.get('/download/:id', (req, res) => {
+
+        const imageId = new ObjectID(req.params.id);
+
+        GridFSBucket.openDownloadStream(imageId)
+            .pipe(
+                fs.createWriteStream('./image.jpg')
+            )
+            .on('error', error => {
+                res.json({ error: error })
+            })
+            .on('finish', () => {
+                res.json({ download: 'ok' })
+            });
+    })
+
+    /**
+     * @route GET /files/:id
+     * @desc  Display single file object
+     * */
+    router.get('/files/:id', (req, res) => {
+
+        const imageId = new ObjectID(req.params.id);
+
+        GridFSBucket.openDownloadStream(imageId)
+            .on('data', chunk => {
+                res.write(chunk);
+            })
+            .on('error', error => {
+                res.json({ error: error })
+            })
+            .on('end', () => {
+                res.end();
+            });
+    });
+
+    /**
+    * @route GET /image/:id
+    * @desc Display Image
+    * */
+    router.get('/image/:id', (req, res) => {
+
+        const imageId = new ObjectID(req.params.id);
+
+        GridFSBucket.find(imageId)
+            .on('error', error => {
+                res.json({ image: error, ERROR: 'imagem não encontrada' })
+            })
+            .on('data', file => {
+                res.json({ file });
+            })
+            .on('end', () => {
+                res.end();
+            });
+    });
+
+    /**
+     * @route GET /files
+     * @desc  Display all files in JSON
+     * */
+    router.get('/files', (req, res) => {
+
+        GridFSBucket.find().toArray((error, files) => {
+            if (!files || files.length === 0) {
+                return res.json({ database: error, ERROR: 'não há imagens para listar' });
+            } else {
+                return res.json({ files });
+            }
+        });
+    });
+
+    /**
+     * @route DELETE /files/:id
+     * @desc  Delete file
+     * */
+    router.delete('/files/:id', (req, res) => {
+
+        const imageId = new ObjectID(req.params.id);
+
+        GridFSBucket.delete(imageId, error => {
+            if (!imageId) {
+                return res.json(error)
+            } else {
+                return res.json({ image: 'deleted' })
+            }
+        })
+    });
+
+    /**
+    * @route GET /drop
+    * @desc remove all files and chunks
+    * */
+    router.get('/drop', (req, res) => {
+
+        GridFSBucket.drop(() => {
+            res.json({ delete: 'all files and chunks' })
+        })
+    });
 });
+
+module.exports = router;
 
 /* --- PARA RENDERIZAR HTML CASO FRONTEND ESTAR JUNTO COMO BACKEND ---
 // @route GET /
@@ -116,5 +153,3 @@ router.get('/', (req, res) => {
     });
 });
 */
-
-module.exports = router;
